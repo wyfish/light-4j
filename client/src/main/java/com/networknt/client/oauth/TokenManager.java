@@ -11,6 +11,8 @@ import io.undertow.client.ClientRequest;
 import io.undertow.util.HeaderValues;
 import sun.management.snmp.util.MibLogger;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -85,19 +87,20 @@ public class TokenManager {
     }
 
     /**
-     * get a Jwt with a provided cache key and a token request:
+     * get a Jwt with a provided cache key, a token request and composer type:
      * 1. if the provided key can be cached, populate Jwt with cache strategy
      * 2. if the provided key cannot be cached, populate Jwt without caching
      *
      * @param key          a key based on service id, scope, authorization code, refresh token, saml assertion or client claim
      * @param tokenRequest a token request that contains the components needed by oauth server
+     * @param composerName a enum object of composer name
      * @return a Jwt if successful, otherwise return error Status.
      */
-    public Result<Jwt> getJwt(Jwt.Key key, TokenRequest tokenRequest) {
+    public Result<Jwt> getJwt(Jwt.Key key, TokenRequest tokenRequest, ClientRequestComposerProvider.ClientRequestComposers composerName) {
         if (key.isCachable()) {
             Jwt cachedJwt = getJwt(cacheStrategy, key);
 
-            Result<Jwt> result = OauthHelper.populateToken(cachedJwt, tokenRequest);
+            Result<Jwt> result = OauthHelper.populateToken(cachedJwt, tokenRequest, composerName);
             //update JWT
             if (result.isSuccess()) {
                 cacheStrategy.cacheJwt(key, result.getResult());
@@ -106,7 +109,7 @@ public class TokenManager {
         } else {
             // uncached jwt
             Jwt jwt = new Jwt();
-            Result<TokenResponse> result = OauthHelper.getTokenResult(tokenRequest);
+            Result<TokenResponse> result = OauthHelper.getTokenResultBasedOnComposer(tokenRequest, composerName);
             if (result.isSuccess()) {
                 TokenResponse tokenResponse = result.getResult();
                 jwt.setJwt(tokenResponse.getAccessToken());
@@ -117,6 +120,10 @@ public class TokenManager {
                 return Failure.of(result.getError());
             }
         }
+    }
+
+    public Result<Jwt> getJwt(Jwt.Key key, TokenRequest tokenRequest) {
+        return getJwt(key, tokenRequest, ClientRequestComposerProvider.ClientRequestComposers.EXTERNALIZED_REQUEST_COMPOSER);
     }
 
     //cache jwt if not exist
@@ -138,24 +145,44 @@ public class TokenManager {
      * @return
      */
     public Result<Jwt> getJwt(ClientRequest clientRequest) {
-        HeaderValues scope = clientRequest.getRequestHeaders().get(OauthHelper.SCOPE);
-        HeaderValues customClaims = clientRequest.getRequestHeaders().get(OauthHelper.CUSTOM_CLAIMS);
-        HeaderValues serviceId = clientRequest.getRequestHeaders().get(OauthHelper.SERVICE_ID);
+        ClientCredentialsRequest request = new ClientCredentialsRequest();
         Jwt.Key key = new Jwt.Key();
-        if (scope != null) {
-            key.setScopes(scope.getFirst());
-        }
-        if (customClaims != null) {
-            key.setCustomClaims(customClaims.getFirst());
-        }
-        if (serviceId != null) {
-            key.setServiceId(serviceId.getFirst());
-        }
-        return getJwt(key);
+        return getBaseJwt(clientRequest, request, key, ClientRequestComposerProvider.ClientRequestComposers.CLIENT_CREDENTIAL_REQUEST_COMPOSER);
+    }
+
+    public Result<Jwt> getJwtFromMtls(ClientRequest clientRequest) {
+        ClientCredentialsRequest request = new ClientCredentialsRequest();
+        Jwt.Key key = new Jwt.Key();
+        return getBaseJwt(clientRequest, request, key, ClientRequestComposerProvider.ClientRequestComposers.MTLS_REQUEST_COMPOSER);
+    }
+
+    public Result<Jwt> getJwtFromSaml(ClientRequest clientRequest, String samlAssertion, String jwtClientAssertion) {
+        Jwt.Key key = new Jwt.Key();
+        key.setCachable(false);
+        SAMLBearerRequest request = new SAMLBearerRequest(samlAssertion, jwtClientAssertion);
+        return getBaseJwt(clientRequest, request, key, ClientRequestComposerProvider.ClientRequestComposers.SAML_BEARER_REQUEST_COMPOSER);
     }
 
     public Jwt getJwtFromCache(Jwt.Key key) {
         Jwt result = cacheStrategy.getCachedJwt(key);
         return result;
+    }
+
+    private Result<Jwt> getBaseJwt(ClientRequest clientRequest, TokenRequest tokenRequest, Jwt.Key key, ClientRequestComposerProvider.ClientRequestComposers composerName) {
+        HeaderValues scope = clientRequest.getRequestHeaders().get(OauthHelper.SCOPE);
+        HeaderValues customClaims = clientRequest.getRequestHeaders().get(OauthHelper.CUSTOM_CLAIMS);
+        HeaderValues serviceId = clientRequest.getRequestHeaders().get(OauthHelper.SERVICE_ID);
+        if (scope != null) {
+            key.setScopes(scope.getFirst());
+            tokenRequest.setScope(new ArrayList<String>() {{addAll(key.getScopes());}});
+        }
+        if (customClaims != null) {
+            key.setCustomClaims(customClaims.getFirst());
+            tokenRequest.setCustomClaims(key.getCustomClaims());
+        }
+        if (serviceId != null) {
+            key.setServiceId(serviceId.getFirst());
+        }
+        return getJwt(key, tokenRequest, composerName);
     }
 }

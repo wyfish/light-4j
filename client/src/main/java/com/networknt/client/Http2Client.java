@@ -22,9 +22,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.networknt.client.http.Light4jHttp2ClientProvider;
 import com.networknt.client.http.Light4jHttpClientProvider;
-import com.networknt.client.oauth.Jwt;
-import com.networknt.client.oauth.TokenManager;
-import com.networknt.client.oauth.TokenRequest;
+import com.networknt.client.oauth.*;
 import com.networknt.client.ssl.ClientX509ExtendedTrustManager;
 import com.networknt.client.ssl.TLSConfig;
 import com.networknt.common.SecretConstants;
@@ -94,8 +92,6 @@ public class Http2Client {
     static final String OAUTH = "oauth";
     static final String TOKEN = "token";
 
-
-
     static Map<String, Object> config;
     static Map<String, Object> tokenConfig;
     static Map<String, Object> secretConfig;
@@ -108,20 +104,20 @@ public class Http2Client {
         ModuleRegistry.registerModule(Http2Client.class.getName(), Config.getInstance().getJsonMapConfigNoCache(CONFIG_NAME), masks);
         config = Config.getInstance().getJsonMapConfig(CONFIG_NAME);
         Object bufferSizeObject = config.get(BUFFER_SIZE);
-        if(bufferSizeObject == null) {
+        if (bufferSizeObject == null) {
             bufferSize = DEFAULT_BUFFER_SIZE;
         } else {
-            bufferSize = (int)bufferSizeObject;
+            bufferSize = (int) bufferSizeObject;
         }
-        if(config != null) {
-			Map<String, Object> oauthConfig = (Map<String, Object>)config.get(OAUTH);
-            if(oauthConfig != null) {
-                tokenConfig = (Map<String, Object>)oauthConfig.get(TOKEN);
+        if (config != null) {
+            Map<String, Object> oauthConfig = (Map<String, Object>) config.get(OAUTH);
+            if (oauthConfig != null) {
+                tokenConfig = (Map<String, Object>) oauthConfig.get(TOKEN);
             }
         }
 
         secretConfig = Config.getInstance().getJsonMapConfig(CONFIG_SECRET);
-        if(secretConfig == null) {
+        if (secretConfig == null) {
             throw new ExceptionInInitializerError("Could not locate secret.yml");
         }
     }
@@ -151,7 +147,7 @@ public class Http2Client {
         final Map<String, ClientProvider> map = new HashMap<>();
         for (ClientProvider provider : providers) {
             for (String scheme : provider.handlesSchemes()) {
-            	addProvider(map, scheme, provider);
+                addProvider(map, scheme, provider);
             }
         }
         this.clientProviders = Collections.unmodifiableMap(map);
@@ -165,17 +161,17 @@ public class Http2Client {
     }
 
     private void addProvider(Map<String, ClientProvider> map, String scheme, ClientProvider provider) {
-    	if (System.getProperty("java.version").startsWith("1.8.")) {// Java 8
-        	if (Light4jHttpClientProvider.HTTPS.equalsIgnoreCase(scheme)) {
-        		map.putIfAbsent(scheme, new Light4jHttpClientProvider());
-        	}else if (Light4jHttp2ClientProvider.HTTP2.equalsIgnoreCase(scheme)){
-        		map.putIfAbsent(scheme, new Light4jHttp2ClientProvider());
-        	}else {
-        		map.put(scheme, provider);
-        	}
-    	}else {
-    		map.put(scheme, provider);
-    	}
+        if (System.getProperty("java.version").startsWith("1.8.")) {// Java 8
+            if (Light4jHttpClientProvider.HTTPS.equalsIgnoreCase(scheme)) {
+                map.putIfAbsent(scheme, new Light4jHttpClientProvider());
+            } else if (Light4jHttp2ClientProvider.HTTP2.equalsIgnoreCase(scheme)) {
+                map.putIfAbsent(scheme, new Light4jHttp2ClientProvider());
+            } else {
+                map.put(scheme, provider);
+            }
+        } else {
+            map.put(scheme, provider);
+        }
     }
 
     public IoFuture<ClientConnection> connect(final URI uri, final XnioWorker worker, ByteBufferPool bufferPool, OptionMap options) {
@@ -289,15 +285,15 @@ public class Http2Client {
 
     /**
      * Add Authorization Code grant token the caller app gets from OAuth2 server.
-     *
+     * <p>
      * This is the method called from client like web server
      *
      * @param request the http request
-     * @param token the bearer token
+     * @param token   the bearer token
      */
     public void addAuthToken(ClientRequest request, String token) {
-        if(token != null && !token.startsWith("Bearer ")) {
-            if(token.toUpperCase().startsWith("BEARER ")) {
+        if (token != null && !token.startsWith("Bearer ")) {
+            if (token.toUpperCase().startsWith("BEARER ")) {
                 // other cases of Bearer
                 token = "Bearer " + token.substring(7);
             } else {
@@ -309,16 +305,16 @@ public class Http2Client {
 
     /**
      * Add Authorization Code grant token the caller app gets from OAuth2 server and add traceabilityId
-     *
+     * <p>
      * This is the method called from client like web server that want to have traceabilityId pass through.
      *
-     * @param request the http request
-     * @param token the bearer token
+     * @param request        the http request
+     * @param token          the bearer token
      * @param traceabilityId the traceability id
      */
     public void addAuthTokenTrace(ClientRequest request, String token, String traceabilityId) {
-        if(token != null && !token.startsWith("Bearer ")) {
-            if(token.toUpperCase().startsWith("BEARER ")) {
+        if (token != null && !token.startsWith("Bearer ")) {
+            if (token.toUpperCase().startsWith("BEARER ")) {
                 // other cases of Bearer
                 token = "Bearer " + token.substring(7);
             } else {
@@ -331,7 +327,7 @@ public class Http2Client {
 
     /**
      * Add Client Credentials token cached in the client for standalone application
-     *
+     * <p>
      * This is the method called from standalone application like enterprise scheduler for batch jobs
      * or mobile apps.
      *
@@ -345,40 +341,78 @@ public class Http2Client {
     }
 
     public Result addCcToken(ClientRequest request, List<String> scopes, Map<String, Object> customClaims) {
-        if (scopes != null && !scopes.isEmpty() && request.getRequestHeaders().get("scope") == null) {
-            String scopeStr = String.join(" ", scopes);
-            request.getRequestHeaders().put(HttpString.tryFromString("scope"), scopeStr);
-        }
-        if (customClaims != null && !customClaims.isEmpty() && request.getRequestHeaders().get("custom_claims") == null) {
-            String json = null;
-            try {
-                json = new ObjectMapper().writeValueAsString(customClaims);
-            } catch (JsonProcessingException e) {
-                logger.error("The custom claims can not be encoded");
-                throw new RuntimeException("The custom claims can not be encoded", e);
+        return addToken(request, scopes, customClaims, ClientRequestComposerProvider.ClientRequestComposers.CLIENT_CREDENTIAL_REQUEST_COMPOSER, null, null);
+    }
+
+    public Result addMtlsToken(ClientRequest request) {
+        Map<String, Object> customClaims = getDefaultCustomClaims();
+        List<String> scopes = getDefaultScopes();
+        return addMtlsToken(request, scopes, customClaims);
+    }
+
+    public Result addMtlsToken(ClientRequest request, List<String> scopes, Map<String, Object> customClaims) {
+        return addToken(request, scopes, customClaims, ClientRequestComposerProvider.ClientRequestComposers.MTLS_REQUEST_COMPOSER, null, null);
+    }
+
+    public Result addSamlToken(ClientRequest request, String samlAssertion, String jwtClientAssertion) {
+        Map<String, Object> customClaims = getDefaultCustomClaims();
+        List<String> scopes = getDefaultScopes();
+        return addSamlToken(request, scopes, customClaims, samlAssertion, jwtClientAssertion);
+    }
+
+    public Result addSamlToken(ClientRequest request, List<String> scopes, Map<String, Object> customClaims, String samlAssertion, String jwtClientAssertion) {
+        return addToken(request, scopes, customClaims, ClientRequestComposerProvider.ClientRequestComposers.SAML_BEARER_REQUEST_COMPOSER, samlAssertion, jwtClientAssertion);
+    }
+
+    private Result addToken(ClientRequest request, List<String> scopes, Map<String, Object> customClaims,
+                            ClientRequestComposerProvider.ClientRequestComposers composerName, String samlAssertion, String jwtClientAssertion) {
+        Result<Jwt> result = null;
+        if (request != null) {
+            if (scopes != null && !scopes.isEmpty() && request.getRequestHeaders().get("scope") == null) {
+                String scopeStr = String.join(" ", scopes);
+                request.getRequestHeaders().put(HttpString.tryFromString("scope"), scopeStr);
             }
-            String customClaimsStr = Base64.getEncoder().encodeToString(json.getBytes());
-            request.getRequestHeaders().put(HttpString.tryFromString("custom_claims"), customClaimsStr);
+            if (customClaims != null && !customClaims.isEmpty() && request.getRequestHeaders().get("custom_claims") == null) {
+                String json = null;
+                try {
+                    json = new ObjectMapper().writeValueAsString(customClaims);
+                } catch (JsonProcessingException e) {
+                    logger.error("The custom claims can not be encoded");
+                    throw new RuntimeException("The custom claims can not be encoded", e);
+                }
+                String customClaimsStr = Base64.getEncoder().encodeToString(json.getBytes());
+                request.getRequestHeaders().put(HttpString.tryFromString("custom_claims"), customClaimsStr);
+            }
+            if (composerName.equals(ClientRequestComposerProvider.ClientRequestComposers.SAML_BEARER_REQUEST_COMPOSER)) {
+                result = tokenManager.getJwtFromSaml(request, samlAssertion, jwtClientAssertion);
+            } else if (composerName.equals(ClientRequestComposerProvider.ClientRequestComposers.MTLS_REQUEST_COMPOSER)) {
+                result = tokenManager.getJwtFromMtls(request);
+            } else {
+                result = tokenManager.getJwt(request);
+            }
+            if (result.isFailure()) {
+                return Failure.of(result.getError());
+            }
+            request.getRequestHeaders().put(Headers.AUTHORIZATION, "Bearer " + result.getResult().getJwt());
         }
-        Result<Jwt> result = tokenManager.getJwt(request);
-        if(result.isFailure()) { return Failure.of(result.getError()); }
-        request.getRequestHeaders().put(Headers.AUTHORIZATION, "Bearer " + result.getResult().getJwt());
         return result;
     }
 
     /**
      * Add Client Credentials token cached in the client for standalone application
-     *
+     * <p>
      * This is the method called from standalone application like enterprise scheduler for batch jobs
      * or mobile apps.
      *
-     * @param request the http request
+     * @param request        the http request
      * @param traceabilityId the traceability id
      * @return Result when fail to get jwt, it will return a Status.
      */
     public Result addCcTokenTrace(ClientRequest request, String traceabilityId) {
         Result<Jwt> result = tokenManager.getJwt(request);
-        if(result.isFailure()) { return Failure.of(result.getError()); }
+        if (result.isFailure()) {
+            return Failure.of(result.getError());
+        }
         request.getRequestHeaders().put(Headers.AUTHORIZATION, "Bearer " + result.getResult().getJwt());
         request.getRequestHeaders().put(HttpStringConstants.TRACEABILITY_ID, traceabilityId);
         return result;
@@ -387,10 +421,10 @@ public class Http2Client {
     /**
      * Support API to API calls with scope token. The token is the original token from consumer and
      * the client credentials token of caller API is added from cache.
-     *
+     * <p>
      * This method is used in API to API call
      *
-     * @param request the http request
+     * @param request  the http request
      * @param exchange the http server exchange
      */
     public Result propagateHeaders(ClientRequest request, final HttpServerExchange exchange) {
@@ -404,33 +438,34 @@ public class Http2Client {
      * Support API to API calls with scope token. The token is the original token from consumer and
      * the client credentials token of caller API is added from cache. authToken, correlationId and
      * traceabilityId are passed in as strings.
-     *
+     * <p>
      * This method is used in API to API call
      *
-     * @param request the http request
-     * @param authToken the authorization token
-     * @param correlationId the correlation id
+     * @param request        the http request
+     * @param authToken      the authorization token
+     * @param correlationId  the correlation id
      * @param traceabilityId the traceability id
      * @return Result when fail to get jwt, it will return a Status.
      */
     public Result populateHeader(ClientRequest request, String authToken, String correlationId, String traceabilityId) {
-        if(traceabilityId != null) {
+        if (traceabilityId != null) {
             addAuthTokenTrace(request, authToken, traceabilityId);
         } else {
             addAuthToken(request, authToken);
         }
         Result<Jwt> result = tokenManager.getJwt(request);
-        if(result.isFailure()) { return Failure.of(result.getError()); }
+        if (result.isFailure()) {
+            return Failure.of(result.getError());
+        }
         request.getRequestHeaders().put(HttpStringConstants.CORRELATION_ID, correlationId);
         request.getRequestHeaders().put(HttpStringConstants.SCOPE_TOKEN, "Bearer " + result.getResult().getJwt());
         return result;
     }
 
 
-
     private static KeyStore loadKeyStore(final String name, final char[] password) throws IOException {
         final InputStream stream = Config.getInstance().getInputStreamFromFile(name);
-        if(stream == null) {
+        if (stream == null) {
             throw new RuntimeException("Could not load keystore");
         }
         try {
@@ -452,9 +487,9 @@ public class Http2Client {
      * @throws IOException
      */
     public static SSLContext createSSLContext() throws IOException {
-    	Map<String, Object> tlsMap = (Map<String, Object>)config.get(TLS);
-    	
-    	return null==tlsMap?null:createSSLContext((String)tlsMap.get(TLSConfig.DEFAULT_GROUP_KEY));
+        Map<String, Object> tlsMap = (Map<String, Object>) config.get(TLS);
+
+        return null == tlsMap ? null : createSSLContext((String) tlsMap.get(TLSConfig.DEFAULT_GROUP_KEY));
     }
 
     /**
@@ -465,18 +500,18 @@ public class Http2Client {
      * @throws IOException
      */
     @SuppressWarnings("unchecked")
-	public static SSLContext createSSLContext(String trustedNamesGroupKey) throws IOException {
+    public static SSLContext createSSLContext(String trustedNamesGroupKey) throws IOException {
         SSLContext sslContext = null;
         KeyManager[] keyManagers = null;
-        Map<String, Object> tlsMap = (Map<String, Object>)config.get(TLS);
-        if(tlsMap != null) {
+        Map<String, Object> tlsMap = (Map<String, Object>) config.get(TLS);
+        if (tlsMap != null) {
             try {
                 // load key store for client certificate if two way ssl is used.
                 Boolean loadKeyStore = (Boolean) tlsMap.get(LOAD_KEY_STORE);
                 if (loadKeyStore != null && loadKeyStore) {
-                    String keyStoreName = (String)tlsMap.get(KEY_STORE);
-                    String keyStorePass = (String)secretConfig.get(SecretConstants.CLIENT_KEYSTORE_PASS);
-                    String keyPass = (String)secretConfig.get(SecretConstants.CLIENT_KEY_PASS);
+                    String keyStoreName = (String) tlsMap.get(KEY_STORE);
+                    String keyStorePass = (String) secretConfig.get(SecretConstants.CLIENT_KEYSTORE_PASS);
+                    String keyPass = (String) secretConfig.get(SecretConstants.CLIENT_KEY_PASS);
                     KeyStore keyStore = loadKeyStore(keyStoreName, keyStorePass.toCharArray());
                     KeyManagerFactory keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
                     keyManagerFactory.init(keyStore, keyPass.toCharArray());
@@ -496,11 +531,13 @@ public class Http2Client {
                     String trustStoreName = System.getProperty(TRUST_STORE_PROPERTY);
                     String trustStorePass = System.getProperty(TRUST_STORE_PASSWORD_PROPERTY);
                     if (trustStoreName != null && trustStorePass != null) {
-                        if(logger.isInfoEnabled()) logger.info("Loading trust store from system property at " + Encode.forJava(trustStoreName));
+                        if (logger.isInfoEnabled())
+                            logger.info("Loading trust store from system property at " + Encode.forJava(trustStoreName));
                     } else {
                         trustStoreName = (String) tlsMap.get(TRUST_STORE);
-                        trustStorePass = (String)secretConfig.get(SecretConstants.CLIENT_TRUSTSTORE_PASS);
-                        if(logger.isInfoEnabled()) logger.info("Loading trust store from config at " + Encode.forJava(trustStoreName));
+                        trustStorePass = (String) secretConfig.get(SecretConstants.CLIENT_TRUSTSTORE_PASS);
+                        if (logger.isInfoEnabled())
+                            logger.info("Loading trust store from config at " + Encode.forJava(trustStoreName));
                     }
                     if (trustStoreName != null && trustStorePass != null) {
                         KeyStore trustStore = loadKeyStore(trustStoreName, trustStorePass.toCharArray());
@@ -531,7 +568,7 @@ public class Http2Client {
     public static String getFormDataString(Map<String, String> params) throws UnsupportedEncodingException {
         StringBuilder result = new StringBuilder();
         boolean first = true;
-        for(Map.Entry<String, String> entry : params.entrySet()){
+        for (Map.Entry<String, String> entry : params.entrySet()) {
             if (first)
                 first = false;
             else
@@ -575,7 +612,7 @@ public class Http2Client {
                 });
                 try {
                     result.getRequestChannel().shutdownWrites();
-                    if(!result.getRequestChannel().flush()) {
+                    if (!result.getRequestChannel().flush()) {
                         result.getRequestChannel().getWriteSetter().set(ChannelListeners.<StreamSinkChannel>flushingChannelListener(null, null));
                         result.getRequestChannel().resumeWrites();
                     }
@@ -666,7 +703,7 @@ public class Http2Client {
                 });
                 try {
                     result.getRequestChannel().shutdownWrites();
-                    if(!result.getRequestChannel().flush()) {
+                    if (!result.getRequestChannel().flush()) {
                         result.getRequestChannel().getWriteSetter().set(ChannelListeners.<StreamSinkChannel>flushingChannelListener(null, null));
                         result.getRequestChannel().resumeWrites();
                     }

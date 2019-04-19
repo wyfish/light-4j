@@ -84,32 +84,19 @@ public class OauthHelper {
     }
 
     public static Result<TokenResponse> getTokenResult(TokenRequest tokenRequest) {
-        final AtomicReference<Result<TokenResponse>> reference = new AtomicReference<>();
-        final Http2Client client = Http2Client.getInstance();
-        final CountDownLatch latch = new CountDownLatch(1);
-        final ClientConnection connection;
-        try {
-            connection = client.connect(new URI(tokenRequest.getServerUrl()), Http2Client.WORKER, Http2Client.SSL, Http2Client.BUFFER_POOL, tokenRequest.enableHttp2 ? OptionMap.create(UndertowOptions.ENABLE_HTTP2, true): OptionMap.EMPTY).get();
-        } catch (Exception e) {
-            logger.error("cannot establish connection:", e);
-            return Failure.of(new Status(ESTABLISH_CONNECTION_ERROR, tokenRequest.getServerUrl()));
-        }
+        return getTokenResultBasedOnComposer(tokenRequest,ClientRequestComposerProvider.ClientRequestComposers.CLIENT_CREDENTIAL_REQUEST_COMPOSER);
+    }
 
-        try {
-            IClientRequestComposable requestComposer = ClientRequestComposerProvider.getInstance().getComposer(ClientRequestComposerProvider.ClientRequestComposers.CLIENT_CREDENTIAL_REQUEST_COMPOSER);
+    public static Result<TokenResponse> getTokenResultFromMtls(TokenRequest tokenRequest) {
+        return getTokenResultBasedOnComposer(tokenRequest,ClientRequestComposerProvider.ClientRequestComposers.MTLS_REQUEST_COMPOSER);
+    }
 
-            connection.getIoThread().execute(new TokenRequestAction(tokenRequest, requestComposer, connection, reference, latch));
+    public static Result<TokenResponse> getTokenFromSamlResult(SAMLBearerRequest tokenRequest) {
+        return getTokenResultBasedOnComposer(tokenRequest,ClientRequestComposerProvider.ClientRequestComposers.SAML_BEARER_REQUEST_COMPOSER);
+    }
 
-            latch.await(4, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            logger.error("IOException: ", e);
-            return Failure.of(new Status(FAIL_TO_SEND_REQUEST));
-        } finally {
-            IoUtils.safeClose(connection);
-        }
-
-        //if reference.get() is null at this point, mostly likely couldn't get token within latch.await() timeout.
-        return reference.get() == null ? Failure.of(new Status(GET_TOKEN_TIMEOUT)) : reference.get();
+    public static Result<TokenResponse> getTokenResultFromExternalizedComposer(SAMLBearerRequest tokenRequest) {
+        return getTokenResultBasedOnComposer(tokenRequest,ClientRequestComposerProvider.ClientRequestComposers.EXTERNALIZED_REQUEST_COMPOSER);
     }
 
     public static Result<TokenResponse> getSignResult(SignRequest signRequest) {
@@ -207,32 +194,6 @@ public class OauthHelper {
         throw new ClientException(responseResult.getError());
     }
 
-    public static Result<TokenResponse> getTokenFromSamlResult(SAMLBearerRequest tokenRequest) {
-        final AtomicReference<Result<TokenResponse>> reference = new AtomicReference<>();
-        final Http2Client client = Http2Client.getInstance();
-        final CountDownLatch latch = new CountDownLatch(1);
-        final ClientConnection connection;
-        try {
-            connection = client.connect(new URI(tokenRequest.getServerUrl()), Http2Client.WORKER, Http2Client.SSL, Http2Client.BUFFER_POOL, tokenRequest.enableHttp2 ? OptionMap.create(UndertowOptions.ENABLE_HTTP2, true): OptionMap.EMPTY).get();
-        } catch (Exception e) {
-            logger.error("cannot establish connection:", e);
-            return Failure.of(new Status(ESTABLISH_CONNECTION_ERROR));
-        }
-        try {
-            IClientRequestComposable requestComposer = ClientRequestComposerProvider.getInstance().getComposer(ClientRequestComposerProvider.ClientRequestComposers.SAML_BEARER_REQUEST_COMPOSER);
-
-            connection.getIoThread().execute(new TokenRequestAction(tokenRequest, requestComposer, connection, reference, latch));
-
-            latch.await(4, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            logger.error("IOException: ", e);
-            return Failure.of(new Status(FAIL_TO_SEND_REQUEST));
-        } finally {
-            IoUtils.safeClose(connection);
-        }
-        //if reference.get() is null at this point, mostly likely couldn't get token within latch.await() timeout.
-        return reference.get() == null ? Failure.of(new Status(GET_TOKEN_TIMEOUT)) : reference.get();
-    }
 
     /**
      * This private class is to encapsulate the action to send request, and handling response,
@@ -455,6 +416,20 @@ public class OauthHelper {
      * @return When success return Jwt; When fail return Status.
      */
     public static Result<Jwt> populateCCToken(final Jwt jwt) {
+        ClientCredentialsRequest clientCredentialsRequest = new ClientCredentialsRequest();
+        setScope(clientCredentialsRequest, jwt);
+        setCustomClaims(clientCredentialsRequest, jwt);
+        return populateToken(jwt, clientCredentialsRequest, ClientRequestComposerProvider.ClientRequestComposers.CLIENT_CREDENTIAL_REQUEST_COMPOSER);
+    }
+
+    public static Result<Jwt> populateMtlsToken(final Jwt jwt) {
+        ClientCredentialsRequest clientCredentialsRequest = new ClientCredentialsRequest();
+        setScope(clientCredentialsRequest, jwt);
+        setCustomClaims(clientCredentialsRequest, jwt);
+        return populateToken(jwt, clientCredentialsRequest, ClientRequestComposerProvider.ClientRequestComposers.MTLS_REQUEST_COMPOSER);
+    }
+
+    public static Result<Jwt> populateToken(final Jwt jwt, TokenRequest tokenRequest, ClientRequestComposerProvider.ClientRequestComposers composerName) {
         boolean isInRenewWindow = jwt.getExpire() - System.currentTimeMillis() < jwt.getTokenRenewBeforeExpired();
         logger.trace("isInRenewWindow = " + isInRenewWindow);
         //if not in renew window, return the current jwt.
@@ -463,77 +438,15 @@ public class OauthHelper {
         synchronized (jwt) {
             //if token expired, try to renew synchronously
             if(jwt.getExpire() <= System.currentTimeMillis()) {
-                Result<Jwt> result = renewCCTokenSync(jwt);
+                Result<Jwt> result = renewTokenSync(jwt, tokenRequest, composerName);
                 if(logger.isTraceEnabled()) logger.trace("Check secondary token is done!");
                 return result;
             } else {
                 //otherwise renew token silently
-                renewCCTokenAsync(jwt);
+                renewTokenAsync(jwt, tokenRequest, composerName);
                 if(logger.isTraceEnabled()) logger.trace("Check secondary token is done!");
                 return Success.of(jwt);
             }
-        }
-    }
-
-    public static Result<Jwt> populateToken(final Jwt jwt, TokenRequest tokenRequest) {
-        boolean isInRenewWindow = jwt.getExpire() - System.currentTimeMillis() < jwt.getTokenRenewBeforeExpired();
-        logger.trace("isInRenewWindow = " + isInRenewWindow);
-        //if not in renew window, return the current jwt.
-        if(!isInRenewWindow) { return Success.of(jwt); }
-        //the same jwt shouldn't be renew at the same time. different jwt shouldn't affect each other's renew activity.
-        synchronized (jwt) {
-            //if token expired, try to renew synchronously
-            if(jwt.getExpire() <= System.currentTimeMillis()) {
-                Result<Jwt> result = renewTokenSync(jwt, tokenRequest);
-                if(logger.isTraceEnabled()) logger.trace("Check secondary token is done!");
-                return result;
-            } else {
-                //otherwise renew token silently
-                renewTokenAsync(jwt, tokenRequest);
-                if(logger.isTraceEnabled()) logger.trace("Check secondary token is done!");
-                return Success.of(jwt);
-            }
-        }
-    }
-
-    private static Result<Jwt> renewTokenSync(final Jwt jwt, TokenRequest tokenRequest) {
-        // Already expired, try to renew getCCTokenSynchronously but let requests use the old token.
-        logger.trace("In renew window and token is already expired.");
-        //the token can be renew when it's not on renewing or current time is lager than retrying interval
-        if (!jwt.isRenewing() || System.currentTimeMillis() > jwt.getExpiredRetryTimeout()) {
-            jwt.setRenewing(true);
-            jwt.setEarlyRetryTimeout(System.currentTimeMillis() + Jwt.getExpiredRefreshRetryDelay());
-            Result<Jwt> result = getTokenRemotely(jwt, tokenRequest);
-            //set renewing flag to false no mater fail or success
-            jwt.setRenewing(false);
-            return result;
-        } else {
-            if(logger.isTraceEnabled()) logger.trace("Circuit breaker is tripped and not timeout yet!");
-            // token is renewing
-            return Failure.of(new Status(STATUS_CLIENT_CREDENTIALS_TOKEN_NOT_AVAILABLE));
-        }
-    }
-
-    private static void renewTokenAsync(final Jwt jwt, TokenRequest tokenRequest) {
-        // Not expired yet, try to renew async but let requests use the old token.
-        logger.trace("In renew window but token is not expired yet.");
-        if(!jwt.isRenewing() || System.currentTimeMillis() > jwt.getEarlyRetryTimeout()) {
-            jwt.setRenewing(true);
-            jwt.setEarlyRetryTimeout(System.currentTimeMillis() + jwt.getEarlyRefreshRetryDelay());
-            logger.trace("Retrieve token async is called while token is not expired yet");
-
-            ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
-
-            executor.schedule(() -> {
-                Result<Jwt> result = getTokenRemotely(jwt, tokenRequest);
-                if(result.isFailure()) {
-                    // swallow the exception here as it is on a best effort basis.
-                    logger.error("Async retrieve token error with status: {}", result.getError().toString());
-                }
-                //set renewing flag to false after response, doesn't matter if it's success or fail.
-                jwt.setRenewing(false);
-            }, 50, TimeUnit.MILLISECONDS);
-            executor.shutdown();
         }
     }
 
@@ -542,16 +455,17 @@ public class OauthHelper {
      * When success will renew the Jwt jwt passed in.
      * When fail will return Status code so that can be handled by caller.
      * @param jwt the jwt you want to renew
+     * @param tokenRequest tokenRequest object that contains the information needed by auth server
      * @return Jwt when success, it will be the same object as the jwt you passed in; return Status when fail;
      */
-    private static Result<Jwt> renewCCTokenSync(final Jwt jwt) {
+    private static Result<Jwt> renewTokenSync(final Jwt jwt, TokenRequest tokenRequest, ClientRequestComposerProvider.ClientRequestComposers composerName) {
         // Already expired, try to renew getCCTokenSynchronously but let requests use the old token.
         logger.trace("In renew window and token is already expired.");
         //the token can be renew when it's not on renewing or current time is lager than retrying interval
         if (!jwt.isRenewing() || System.currentTimeMillis() > jwt.getExpiredRetryTimeout()) {
             jwt.setRenewing(true);
             jwt.setEarlyRetryTimeout(System.currentTimeMillis() + Jwt.getExpiredRefreshRetryDelay());
-            Result<Jwt> result = getCCTokenRemotely(jwt);
+            Result<Jwt> result = getTokenRemotely(jwt, tokenRequest, composerName);
             //set renewing flag to false no mater fail or success
             jwt.setRenewing(false);
             return result;
@@ -566,8 +480,9 @@ public class OauthHelper {
      * renew the given Jwt jwt asynchronously.
      * When fail, it will swallow the exception, so no need return type to be handled by caller.
      * @param jwt the jwt you want to renew
+     * @param tokenRequest tokenRequest object that contains the information needed by auth server
      */
-    private static void renewCCTokenAsync(final Jwt jwt) {
+    private static void renewTokenAsync(final Jwt jwt, TokenRequest tokenRequest, ClientRequestComposerProvider.ClientRequestComposers composerName) {
         // Not expired yet, try to renew async but let requests use the old token.
         logger.trace("In renew window but token is not expired yet.");
         if(!jwt.isRenewing() || System.currentTimeMillis() > jwt.getEarlyRetryTimeout()) {
@@ -578,7 +493,7 @@ public class OauthHelper {
             ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
 
             executor.schedule(() -> {
-                Result<Jwt> result = getCCTokenRemotely(jwt);
+                Result<Jwt> result = getTokenRemotely(jwt, tokenRequest, composerName);
                 if(result.isFailure()) {
                     // swallow the exception here as it is on a best effort basis.
                     logger.error("Async retrieve token error with status: {}", result.getError().toString());
@@ -591,16 +506,13 @@ public class OauthHelper {
     }
 
     /**
-     * get Client Credential token from auth server
+     * get token from auth server
      * @param jwt the jwt you want to renew
+     * @param tokenRequest tokenRequest object that contains the information needed by auth server
      * @return Jwt when success, it will be the same object as the jwt you passed in; return Status when fail;
      */
-    private static Result<Jwt> getCCTokenRemotely(final Jwt jwt) {
-        TokenRequest tokenRequest = new ClientCredentialsRequest();
-        //scopes at this point is may not be set yet when issuing a new token.
-        setScope(tokenRequest, jwt);
-        setCustomClaims(tokenRequest, jwt);
-        Result<TokenResponse> result = OauthHelper.getTokenResult(tokenRequest);
+    private static Result<Jwt> getTokenRemotely(final Jwt jwt, TokenRequest tokenRequest, ClientRequestComposerProvider.ClientRequestComposers composerName) {
+        Result<TokenResponse> result = OauthHelper.getTokenResultBasedOnComposer(tokenRequest, composerName);
         if(result.isSuccess()) {
             TokenResponse tokenResponse = result.getResult();
             jwt.setJwt(tokenResponse.getAccessToken());
@@ -612,24 +524,6 @@ public class OauthHelper {
             return Success.of(jwt);
         } else {
             logger.info("Get client credentials token fail with status: {}", result.getError().toString());
-            return Failure.of(result.getError());
-        }
-    }
-
-    private static Result<Jwt> getTokenRemotely(final Jwt jwt, TokenRequest tokenRequest) {
-        Result<TokenResponse> result = OauthHelper.getTokenResult(tokenRequest);
-        if(result.isSuccess()) {
-            TokenResponse tokenResponse = result.getResult();
-            jwt.setJwt(tokenResponse.getAccessToken());
-            jwt.setRefreshToken(tokenResponse.getRefreshToken());
-            // the expiresIn is seconds and it is converted to millisecond in the future.
-            jwt.setExpire(System.currentTimeMillis() + tokenResponse.getExpiresIn() * 1000);
-            logger.info("Get token {} with expire_in {} seconds", jwt, tokenResponse.getExpiresIn());
-            //set the scope for future usage.
-            jwt.setScopes(tokenResponse.getScope());
-            return Success.of(jwt);
-        } else {
-            logger.info("Get token fail with status: {}", result.getError().toString());
             return Failure.of(result.getError());
         }
     }
@@ -726,6 +620,34 @@ public class OauthHelper {
             long contentLength = requestBody.getBytes(UTF_8).length;
             request.getRequestHeaders().put(Headers.CONTENT_LENGTH, contentLength);
         }
+    }
 
+    public static Result<TokenResponse> getTokenResultBasedOnComposer(TokenRequest tokenRequest, ClientRequestComposerProvider.ClientRequestComposers requestComposerType) {
+        final AtomicReference<Result<TokenResponse>> reference = new AtomicReference<>();
+        final Http2Client client = Http2Client.getInstance();
+        final CountDownLatch latch = new CountDownLatch(1);
+        final ClientConnection connection;
+        try {
+            connection = client.connect(new URI(tokenRequest.getServerUrl()), Http2Client.WORKER, Http2Client.SSL, Http2Client.BUFFER_POOL, tokenRequest.enableHttp2 ? OptionMap.create(UndertowOptions.ENABLE_HTTP2, true): OptionMap.EMPTY).get();
+        } catch (Exception e) {
+            logger.error("cannot establish connection:", e);
+            return Failure.of(new Status(ESTABLISH_CONNECTION_ERROR, tokenRequest.getServerUrl()));
+        }
+
+        try {
+            IClientRequestComposable requestComposer = ClientRequestComposerProvider.getInstance().getComposer(requestComposerType);
+
+            connection.getIoThread().execute(new TokenRequestAction(tokenRequest, requestComposer, connection, reference, latch));
+
+            latch.await(4, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            logger.error("IOException: ", e);
+            return Failure.of(new Status(FAIL_TO_SEND_REQUEST));
+        } finally {
+            IoUtils.safeClose(connection);
+        }
+
+        //if reference.get() is null at this point, mostly likely couldn't get token within latch.await() timeout.
+        return reference.get() == null ? Failure.of(new Status(GET_TOKEN_TIMEOUT)) : reference.get();
     }
 }

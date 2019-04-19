@@ -23,20 +23,21 @@ import java.util.Map;
  * Created by steve on 02/09/16.
  */
 public class TokenRequest {
-    public static String OAUTH = "oauth";
-    public static String TOKEN = "token";
-    public static String SERVER_URL = "server_url";
-    public static String ENABLE_HTTP2 = "enableHttp2";
-    public static String AUTHORIZATION_CODE = "authorization_code";
-    public static String CLIENT_CREDENTIALS = "client_credentials";
-    public static String SAML_BEARER = "saml_bearer";
-    public static String REFRESH_TOKEN = "refresh_token";
-    public static String URI = "uri";
-    public static String CLIENT_ID = "client_id";
-    public static String REDIRECT_URI = "redirect_uri";
-    public static String SCOPE = "scope";
-    public static String CSRF = "csrf";
-    public static String CUSTOM_CLAIMS = "custom_claims";
+    public static final String OAUTH = "oauth";
+    public static final String TOKEN = "token";
+    public static final String SERVER_URL = "server_url";
+    public static final String ENABLE_HTTP2 = "enableHttp2";
+    public static final String AUTHORIZATION_CODE = "authorization_code";
+    public static final String CLIENT_CREDENTIALS = "client_credentials";
+    public static final String SAML_BEARER = "saml_bearer";
+    public static final String REFRESH_TOKEN = "refresh_token";
+    public static final String URI = "uri";
+    public static final String CLIENT_ID = "client_id";
+    public static final String REDIRECT_URI = "redirect_uri";
+    public static final String SCOPE = "scope";
+    public static final String CSRF = "csrf";
+    public static final String CUSTOM_CLAIMS = "custom_claims";
+    public static final String GRANT_TYPE_KEY = "grant_type";
 
     String grantType;
     String serverUrl;

@@ -508,143 +508,99 @@ public class Http2ClientTest {
     }
 
     @Test
-    public void testAddCcTokenWithoutReadingFromConfig() {
+    public void testParametricAddCcToken() {
         final Http2Client client = createClient();
         ClientRequest request = new ClientRequest();
-        // encoded custom claims
+        // create a custom claims
         Map<String, Object> customClaimsMap = new HashMap<>();
         customClaimsMap.put("key1", "value1");
         customClaimsMap.put("key2", "value2");
-        String json = null;
-        try {
-            json = new ObjectMapper().writeValueAsString(customClaimsMap);
-        } catch (JsonProcessingException e) {
-            logger.error("The custom claims cannot be encoded.");
-            throw new RuntimeException("The custom claims cannot be encoded.", e);
-        }
-        String customClaimsStr = java.util.Base64.getEncoder().encodeToString(json.getBytes());
-        // set scopes and custom claims into request header
-        request.getRequestHeaders().put(HttpString.tryFromString("scope"), "test.w test.r");
-        request.getRequestHeaders().put(HttpString.tryFromString("custom_claims"), customClaimsStr);
-        Result<Jwt> result = (Result<Jwt>) client.addCcToken(request);
+        // create a scope list
+        String scope = "test.w test.r test.d";
+        List<String> scopeList = Arrays.asList(scope.split(" "));
+
+        Result<Jwt> result = (Result<Jwt>) client.addCcToken(request, scopeList, customClaimsMap);
         Assert.assertTrue(result.isSuccess());
         // test caching mechanism
         Jwt.Key key = new Jwt.Key();
-        key.setCustomClaims(customClaimsStr);
+        key.setCustomClaims(customClaimsMap);
         // different order and amount of scopes, should be reorganized as same as used above
-        key.setScopes("test.r test.w test.w");
+        key.setScopes("test.r test.w test.w test.d");
         Jwt jwt = TokenManager.getInstance().getJwtFromCache(key);
         Assert.assertEquals(result.getResult().getJwt(), jwt.getJwt());
     }
 
     @Test
-    public void testAddCcTokenWithDefaultConfig() {
+    public void testAddCcToken() {
         final Http2Client client = createClient();
         ClientRequest request = new ClientRequest();
         Result<Jwt> result = (Result<Jwt>) client.addCcToken(request);
         Assert.assertTrue(result.isSuccess());
     }
 
-    /**
-     * Test method used to get Jwt by using:
-     * 1. An empty jwt identified by scopes
-     * 2. An example client credential request
-     *
-     * @param cachable the flag to indicate that whether enable caching mechanism
-     * @return Jwt
-     */
-    private Result<Jwt> getJwtRemotely(String scope, boolean cachable) {
-        Jwt.Key key = new Jwt.Key();
-        key.setScopes(Collections.singleton(scope));
-        key.setCachable(true);
-        TokenRequest tokenRequest = new TokenRequest();
-        tokenRequest.setGrantType("client_credential");
-        tokenRequest.setServerUrl("http://localhost:7777");
-        tokenRequest.setUri("/oauth2/token");
-        tokenRequest.setClientId("test_client");
-        tokenRequest.setClientSecret("test_secret");
-        tokenRequest.setScope(Collections.singletonList(scope));
-        tokenRequest.setEnableHttp2(true);
-        Result<Jwt> result = TokenManager.getInstance().getJwt(key, tokenRequest);
-        return result;
-    }
-
     @Test
-    public void testGetJwtWithoutCache() {
-        String scope = "test.w";
-        Result<Jwt> result = getJwtRemotely(scope, false);
-        Assert.assertEquals(result.isSuccess(), true);
-        // generate another jwt with same scope
-        Jwt.Key key = new Jwt.Key("test.w");
-        Assert.assertNull(TokenManager.getInstance().getJwtFromCache(key));
-    }
+    public void testParametricAddMtlsToken() {
+        final Http2Client client = createClient();
+        ClientRequest request = new ClientRequest();
+        // create a custom claims
+        Map<String, Object> customClaimsMap = new HashMap<>();
+        customClaimsMap.put("key1", "value1");
+        customClaimsMap.put("key2", "value2");
+        // create a scope list
+        String scope = "test.w test.r test.d";
+        List<String> scopeList = Arrays.asList(scope.split(" "));
 
-    @Test
-    public void testGetJwtWithCache() {
-        String scope = "test.w";
-        Result<Jwt> result = getJwtRemotely(scope, true);
-        Assert.assertEquals(result.isSuccess(), true);
-        // generate another jwt with same scope
-        Jwt.Key key = new Jwt.Key();
-        key.setScopes(Collections.singleton(scope));
-        Assert.assertNotNull(TokenManager.getInstance().getJwtFromCache(key));
-        Assert.assertEquals(TokenManager.getInstance().getJwtFromCache(key).getJwt(), result.getResult().getJwt());
-    }
-
-    @Test
-    public void testGetJwtWithClientClaimCache() {
-        Map<String, Object> validCustomClaimsMap = new HashMap<>();
-        validCustomClaimsMap.put("123", "456");
-        Jwt.Key key = new Jwt.Key();
-        key.setCustomClaims(validCustomClaimsMap);
-        key.setCachable(true);
-        TokenRequest tokenRequest = new TokenRequest();
-        tokenRequest.setGrantType("client_credential");
-        tokenRequest.setServerUrl("http://localhost:7777");
-        tokenRequest.setUri("/oauth2/token");
-        tokenRequest.setClientId("test_client");
-        tokenRequest.setClientSecret("test_secret");
-        tokenRequest.setEnableHttp2(true);
-        Result<Jwt> result = TokenManager.getInstance().getJwt(key, tokenRequest);
+        Result<Jwt> result = (Result<Jwt>) client.addMtlsToken(request, scopeList, customClaimsMap);
         Assert.assertTrue(result.isSuccess());
-        Assert.assertEquals(TokenManager.getInstance().getJwtFromCache(key).getJwt(), result.getResult().getJwt());
+        // test caching mechanism
+        Jwt.Key key = new Jwt.Key();
+        key.setCustomClaims(customClaimsMap);
+        // different order and amount of scopes, should be reorganized as same as used above
+        key.setScopes("test.r test.w test.w test.d");
+        Jwt jwt = TokenManager.getInstance().getJwtFromCache(key);
+        Assert.assertEquals(result.getResult().getJwt(), jwt.getJwt());
     }
 
     @Test
-    public void testGetCachedJwtAboutToExpire() {
-        String scope = "test.w";
-        Result<Jwt> result1 = getJwtRemotely(scope,true);
-        Long before = System.currentTimeMillis();
-        Result<Jwt> result2 = getJwtRemotely(scope,true);
-        Long after = System.currentTimeMillis();
-        Assert.assertEquals(result1.isSuccess(), true);
-        Assert.assertEquals(result2.isSuccess(), true);
-        // the second time to get Jwt should only take few milliseconds since the jwt is got from cache directly without call oauth server
-        Assert.assertTrue(after - before < 500);
+    public void testAddMtlsToken() {
+        final Http2Client client = createClient();
+        ClientRequest request = new ClientRequest();
+        Result<Jwt> result = (Result<Jwt>) client.addMtlsToken(request);
+        Assert.assertTrue(result.isSuccess());
     }
 
     @Test
-    public void testGetJwtMultithread() throws ExecutionException, InterruptedException {
+    public void testParametricAddSamlToken() {
+        final Http2Client client = createClient();
+        ClientRequest request = new ClientRequest();
+        // create a custom claims
+        Map<String, Object> customClaimsMap = new HashMap<>();
+        customClaimsMap.put("key1", "value1");
+        customClaimsMap.put("key2", "value2");
+        // create a scope list
+        String scope = "test.w test.r test.d";
+        List<String> scopeList = Arrays.asList(scope.split(" "));
+
+        Result<Jwt> result = (Result<Jwt>) client.addSamlToken(request, scopeList, customClaimsMap, "samlAssertion", "jwtClientAssertion");
+        Assert.assertTrue(result.isSuccess());
+    }
+
+    @Test
+    public void testAddSamlToken() {
+        final Http2Client client = createClient();
+        ClientRequest request = new ClientRequest();
+        Result<Jwt> result = (Result<Jwt>) client.addSamlToken(request, "samlAssertion", "jwtClientAssertion");
+        Assert.assertTrue(result.isSuccess());
+    }
+
+    @Test
+    public void testGetJwtMultiThread() throws ExecutionException, InterruptedException {
         List<Result<Jwt>> resultList = callGetJwtMultiThread(4);
         for (Result<Jwt> result : resultList) {
             Assert.assertTrue(result.isSuccess());
         }
     }
 
-    @Test
-    public void testGetCachedJwtExpired() throws InterruptedException {
-        String scope = "test.w";
-        Result<Jwt> result1 = getJwtRemotely(scope,true);
-        // wait for jwt expire
-        Thread.sleep(5000);
-        Long before = System.currentTimeMillis();
-        Result<Jwt> result2 = getJwtRemotely(scope,true);
-        Long after = System.currentTimeMillis();
-        Assert.assertEquals(result1.isSuccess(), true);
-        Assert.assertEquals(result2.isSuccess(), true);
-        // the Jwt got from cache is expired, refresh the token needs at least 1 seconds
-        Assert.assertTrue(after - before > 1000);
-    }
 
     @Test
     public void testAsyncAboutToExpire() throws InterruptedException, ExecutionException {
@@ -702,7 +658,7 @@ public class Http2ClientTest {
     }
 
     private List<Result<Jwt>> callGetJwtMultiThread(final int threadCount) throws InterruptedException, ExecutionException {
-        Callable<Result<Jwt>> task = this::getJwtRemotely;
+        Callable<Result<Jwt>> task = this::getCcToken;
         List<Callable<Result<Jwt>>> tasks = Collections.nCopies(threadCount, task);
         ExecutorService executorService = Executors.newFixedThreadPool(threadCount);
         List<Future<Result<Jwt>>> futures = executorService.invokeAll(tasks);
@@ -713,8 +669,10 @@ public class Http2ClientTest {
         return resultList;
     }
 
-    private Result<Jwt> getJwtRemotely() {
-        return getJwtRemotely("test.w", true);
+    private Result<Jwt> getCcToken() {
+        final Http2Client client = createClient();
+        ClientRequest request = new ClientRequest();
+        return (Result<Jwt>) client.addCcToken(request);
     }
 
     /*
