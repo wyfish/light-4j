@@ -45,7 +45,9 @@ public class Constants {
 
     // Logger
     public static final String AUDIT_LOGGER = "Audit";
-
+    public static final String STATUS = "Status";
+    public static final String STACK_TRACE = "StackTrace";
+    
     // JWT claims for fine-grained authorization in business context.
     // The key for the subject token claims in auditInfo after security handler
     // This token is passed in from Authorization header
